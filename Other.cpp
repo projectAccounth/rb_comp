@@ -1,8 +1,11 @@
 #include "Other.h"
+#include <Adafruit_PWMServoDriver.h>
+#include <Wire.h>
 
 namespace Utils {
     // Function to blink an LED
-    void blinkLED(uint8_t pin, uint8_t times, uint16_t delayMs) {
+    void blinkLED(uint8_t times, uint16_t delayMs) {
+        uint8_t pin = 13;
         pinMode(pin, OUTPUT);
         for (uint8_t i = 0; i < times; i++) {
             digitalWrite(pin, HIGH);

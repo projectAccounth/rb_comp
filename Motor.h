@@ -7,16 +7,15 @@
 #include "Other.h"
 
 #define MIN_PWM 0
-#define MAX_PWM 4095
+#define MAX_PWM 30
 
 class MotorController {
 private:
-    Adafruit_PWMServoDriver pwm;
-    uint8_t notifyLED;
+    Adafruit_PWMServoDriver* pwm;
     int motorChannels[8]; // Array to map motor channels (8 to 15)
 
 public:
-    MotorController(uint8_t ledPin);
+    MotorController(Adafruit_PWMServoDriver* pwm);
 
     void init();
 

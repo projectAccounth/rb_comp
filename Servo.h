@@ -8,11 +8,10 @@
 
 class ServoController {
 private:
-    Adafruit_PWMServoDriver pwm;
+    Adafruit_PWMServoDriver* pwm;
     uint8_t portChannels[6]; // Array to map ports to channels
-
 public:
-    ServoController(uint8_t ledPin);
+    ServoController(Adafruit_PWMServoDriver* pwm);
 
     void init();
 

@@ -7,7 +7,7 @@
 
 namespace Utils {
     // Function to blink an LED
-    void blinkLED(uint8_t pin, uint8_t times, uint16_t delayMs);
+    void blinkLED(uint8_t times, uint16_t delayMs);
     // Function to map a value with constraints
     int constrainedMap(int value, int fromLow, int fromHigh, int toLow, int toHigh);
     // Function to print debug messages

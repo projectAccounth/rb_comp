@@ -49,6 +49,6 @@ public:
     void controlServos();
 
     void control();
-}
+};
 
 #endif // PS2CONTROLLER_H
