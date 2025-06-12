@@ -22,14 +22,23 @@
 #define SINGLE_HAND_DRIVING 0
 #define TWO_HAND_DRIVING 1
 
+enum class Direction {
+    NONE, FORWARD, BACKWARD, RIGHT, LEFT
+};
+
 class PS2Controller {
 private:
-    PS2X ps2x;
     bool drivingMode;
     MotorController* motorController;
     ServoController* servoController;
 
+    const int topSpeedCap = 4000;
+    const int accelIncrement = 75;
+    const int actionDelay = 20; // Delay for motor actions in milliseconds
 public:
+    Direction currentDirection = Direction::NONE;
+    PS2X ps2x;
+
     PS2Controller(MotorController* motorCtrl, ServoController* servoCtrl);
 
     void setup();
@@ -44,11 +53,15 @@ public:
 
     void setMotorSpeeds(int nMotMixL, int nMotMixR, int speed);
 
-    void controlMotors();
+    void goStraight();
+    void goBackward();
+    void goLeft();
+    void goRight();
+    void brake();
 
     void controlServos();
 
-    void control();
+    void getJoystickValues(int& nJoyX, int& nJoyY);
 };
 
 #endif // PS2CONTROLLER_H

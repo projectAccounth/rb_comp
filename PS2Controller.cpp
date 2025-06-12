@@ -24,54 +24,62 @@ int PS2Controller::getSpeed() {
     return NORM_SPEED;
 }
 
-void PS2Controller::controlMotors() {
-    static unsigned int currentSpeed[2] = {0}; // For motor 2 and 3 (index 1 and 2)
-    unsigned int targetSpeed[2] = {0};
-    const unsigned int step = 200; // Speed step for smoothness
-    const int delayMs = 10; // Delay for smoothness
-
-    if (!drivingMode) {
-        // Only update motors 2 and 3 if driving mode is enabled
-        return;
+void PS2Controller::goStraight() {
+    currentDirection = Direction::FORWARD;
+    Serial.println("Going straight.");
+    for (int i = 0; i < topSpeedCap; i += accelIncrement) {
+        motorController->setAllMotorSpeeds(0, i, i, 0); // 2 and 3 forward, 1 and 4 for other purposes
+        delay(actionDelay);
     }
+}
 
-    // Determine target speeds for motors 2 and 3
-    if (ps2x.Button(PSB_PAD_UP)) {
-        targetSpeed[0] = (targetSpeed[0] + 1000u) % 4095; // Motor 2 backward
-        targetSpeed[1] = (targetSpeed[1] + 1000u) % 4095; // Motor 3 backward
-        Serial.println("Motor 2 and Motor 3 running forward.");
-    } else if (ps2x.Button(PSB_PAD_DOWN)) {
-        targetSpeed[0] = (targetSpeed[0] - 1000u) % 4095; // Motor 2 backward
-        targetSpeed[1] = (targetSpeed[1] - 1000u) % 4095; // Motor 3 backward
-        Serial.println("Motor 2 and Motor 3 running backward.");
-    } else if (ps2x.Button(PSB_PAD_LEFT)) {
-        targetSpeed[0] = (targetSpeed[0] - 1000u) % 4095; // Motor 2 backward
-        targetSpeed[1] = (targetSpeed[1] + 1000u) % 4095;  // Motor 3 forward
-        Serial.println("Motor 2 and Motor 3 turning left.");
-    } else if (ps2x.Button(PSB_PAD_RIGHT)) {
-        targetSpeed[0] = (targetSpeed[0] + 1000u) % 4095;  // Motor 2 forward
-        targetSpeed[1] = (targetSpeed[1] - 1000u) % 4095; // Motor 3 backward
-        Serial.println("Motor 2 and Motor 3 turning right.");
-    } else {
+void PS2Controller::goBackward() {
+    currentDirection = Direction::BACKWARD;
+    Serial.println("Going back.");
+    for (int i = 0; i < topSpeedCap; i += accelIncrement) {
+        motorController->setAllMotorSpeeds(0, -i, -i, 0); // 2 and 3 forward, 1 and 4 for other purposes
+        delay(actionDelay);
     }
+}
 
-    // Smoothly ramp currentSpeed to targetSpeed for both motors
-    bool moving = true;
-    while (moving) {
-        moving = false;
-        for (int i = 0; i < 2; i++) {
-            if (currentSpeed[i] < targetSpeed[i]) {
-                currentSpeed[i] = min(currentSpeed[i] + step, targetSpeed[i]);
-                moving = true;
-            } else if (currentSpeed[i] > targetSpeed[i]) {
-                currentSpeed[i] = max(currentSpeed[i] - step, targetSpeed[i]);
-                moving = true;
-            }
+void PS2Controller::goLeft() {
+    currentDirection = Direction::LEFT;
+    Serial.println("Going left.");
+    for (int i = 0; i < topSpeedCap; i += accelIncrement) {
+        motorController->setAllMotorSpeeds(0, -i, i, 0); // 2 and 3 forward, 1 and 4 for other purposes
+        delay(actionDelay);
+    }
+}
+
+void PS2Controller::goRight() {
+    currentDirection = Direction::LEFT;
+    Serial.println("Going right.");
+    for (int i = 0; i < topSpeedCap; i += accelIncrement) {
+        motorController->setAllMotorSpeeds(0, i, -i, 0); // 2 and 3 forward, 1 and 4 for other purposes
+        delay(actionDelay);
+    }
+}
+
+void PS2Controller::brake() {
+    currentDirection = Direction::LEFT;
+    Serial.println("Going straight.");
+    for (int i = 0; i < topSpeedCap / 2; i += accelIncrement) {
+        switch (currentDirection) {
+            case Direction::FORWARD:
+                motorController->setAllMotorSpeeds(0, -i, -i, 0);
+                break;
+            case Direction::BACKWARD:
+                motorController->setAllMotorSpeeds(0, i, i, 0);
+                break;
+            case Direction::LEFT:
+                motorController->setAllMotorSpeeds(0, i, -i, 0);
+                break;
+            case Direction::RIGHT:
+                motorController->setAllMotorSpeeds(0, -i, i, 0);
+                break;
+            default: break;
         }
-        // Apply speeds to motors 2 and 3 (index 1 and 2)
-        motorController->setMotorSpeed(1, currentSpeed[0]);
-        motorController->setMotorSpeed(2, currentSpeed[1]);
-        if (moving) delay(200);
+        delay(actionDelay);
     }
 }
 
@@ -133,8 +141,8 @@ void PS2Controller::controlServos() {
     }
     currentPulse[selectedServo] = targetPulse;
 }
-void PS2Controller::control() {
-    ps2x.read_gamepad(false, false);
-    controlMotors();
-    controlServos();
+
+void PS2Controller::getJoystickValues(int& nJoyX, int& nJoyY) {
+    nJoyX = ps2x.Analog(PSS_LX) - X_JOY_CALIB;
+    nJoyY = ps2x.Analog(PSS_LY) - Y_JOY_CALIB;
 }
