@@ -11,7 +11,7 @@ void MotorController::init() {
     Serial.println("Motor controller initialized");
 }
 
-void MotorController::setMotorSpeed(int motorIndex, int speed) {
+void MotorController::setMotorSpeed(int motorIndex, int speed, bool inverted) {
     if (motorIndex < 0 || motorIndex >= 4) {
         Serial.println("Invalid motor index! Must be between 0 and 3.");
         return;
@@ -21,11 +21,11 @@ void MotorController::setMotorSpeed(int motorIndex, int speed) {
     int channelB = motorChannels[motorIndex * 2 + 1];
 
     if (speed >= 0) {
-        pwm->setPin(channelA, speed);
-        pwm->setPin(channelB, 0);
+        pwm->setPin(channelA, speed, inverted);
+        pwm->setPin(channelB, 0, inverted);
     } else {
-        pwm->setPin(channelA, 0);
-        pwm->setPin(channelB, abs(speed));
+        pwm->setPin(channelA, 0, inverted);
+        pwm->setPin(channelB, abs(speed), inverted);
     }
 }
 
@@ -36,6 +36,11 @@ void MotorController::setAllMotorSpeeds(int speed1, int speed2, int speed3, int 
     setMotorSpeed(3, speed4);
 }
 
+void MotorController::setMotorWheelSpeed(int speedL, int speedR) {
+    setMotorSpeed(1, speedL);
+    setMotorSpeed(2, speedR);
+}
+
 void MotorController::testMotorsSequentially(uint16_t step, uint16_t delayMs) {
     Serial.println("Starting sequential motor test...");
 
@@ -44,7 +49,7 @@ void MotorController::testMotorsSequentially(uint16_t step, uint16_t delayMs) {
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) pwm->setPin(motorChannels[j], 0); // Reset all motors
 
-        for (int pwm_val = 0; pwm_val <= MAX_PWM; pwm_val += step) {
+        for (int pwm_val = 0; pwm_val <= MAX_PWM; pwm_val += 100) {
             Serial.print("Motor channel ");
             Serial.print(motorChannels[i]);
             Serial.print(" running at ");

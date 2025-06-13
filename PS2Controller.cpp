@@ -1,148 +1,263 @@
 #include "PS2Controller.h"
 
+int vclamp(int val, int lo, int hi) {
+    return min(hi, max(val, lo));
+}
+
 PS2Controller::PS2Controller(MotorController* motorCtrl, ServoController* servoCtrl)
-        : drivingMode(true), motorController(motorCtrl), servoController(servoCtrl) {}
+    : motorController(motorCtrl), servoController(servoCtrl) {
+    directionMutex = xSemaphoreCreateMutex();
+}
 
 void PS2Controller::setup() {
     int err = -1;
     while (err != 0) {
         err = ps2x.config_gamepad(PS2_CLK, PS2_CMD, PS2_SEL, PS2_DAT, true, true);
+        delay(1000);
+        Serial.println("Connecting");
     }
-    Serial.println("PS2 Controller setup complete.");
+    Serial.println("Connected.");
+
+    xTaskCreatePinnedToCore(inputTask, "InputTask", 2048, this, 1, NULL, 0);
+    xTaskCreatePinnedToCore(movementTask, "MovementTask", 2048, this, 1, NULL, 1);
+    xTaskCreatePinnedToCore(brakeTask, "BrakeTask", 2048, this, 1, NULL, 1);
+    xTaskCreatePinnedToCore(servoTask, "ServoTask", 2048, this, 1, NULL, 1);
+    xTaskCreatePinnedToCore(controlMotor1, "ControlMotor1", 2048, this, 1, NULL, 1);
+
+    delay(500);
 }
 
-void PS2Controller::toggleDrivingMode() {
-    drivingMode = !drivingMode;
-    Serial.print("Driving mode toggled to: ");
-    Serial.println(drivingMode ? "Driving" : "Stopped");
-}
+void PS2Controller::controlMotor1(void* pv) {
+    PS2Controller* controller = static_cast<PS2Controller*>(pv);
+    const int center = 128;
+    const int deadzone = 10;
+    static int currentPulse = 0;
 
-int PS2Controller::getSpeed() {
-    if (ps2x.Button(PSB_R2)) {
-        return TOP_SPEED;
-    }
-    return NORM_SPEED;
-}
+    controller->motorController->setMotorSpeed(0, 0);
 
-void PS2Controller::goStraight() {
-    currentDirection = Direction::FORWARD;
-    Serial.println("Going straight.");
-    for (int i = 0; i < topSpeedCap; i += accelIncrement) {
-        motorController->setAllMotorSpeeds(0, i, i, 0); // 2 and 3 forward, 1 and 4 for other purposes
-        delay(actionDelay);
-    }
-}
+    while (true) {
+        int lx = controller->ps2x.Analog(PSS_LX);
 
-void PS2Controller::goBackward() {
-    currentDirection = Direction::BACKWARD;
-    Serial.println("Going back.");
-    for (int i = 0; i < topSpeedCap; i += accelIncrement) {
-        motorController->setAllMotorSpeeds(0, -i, -i, 0); // 2 and 3 forward, 1 and 4 for other purposes
-        delay(actionDelay);
-    }
-}
+        if (abs(lx - center) < deadzone) {
+            lx = center;
+        }
 
-void PS2Controller::goLeft() {
-    currentDirection = Direction::LEFT;
-    Serial.println("Going left.");
-    for (int i = 0; i < topSpeedCap; i += accelIncrement) {
-        motorController->setAllMotorSpeeds(0, -i, i, 0); // 2 and 3 forward, 1 and 4 for other purposes
-        delay(actionDelay);
-    }
-}
+        if (lx < center - deadzone * 3) { 
+            currentPulse = max(currentPulse - controller->pwmIncrement, -controller->maxPWM);
+        } 
+        else if (lx > center + deadzone * 3) {
+            currentPulse = min(currentPulse + controller->pwmIncrement, controller->maxPWM);
+        }
+        else {
+            currentPulse = 0;
+        }
 
-void PS2Controller::goRight() {
-    currentDirection = Direction::LEFT;
-    Serial.println("Going right.");
-    for (int i = 0; i < topSpeedCap; i += accelIncrement) {
-        motorController->setAllMotorSpeeds(0, i, -i, 0); // 2 and 3 forward, 1 and 4 for other purposes
-        delay(actionDelay);
+        controller->motorController->setMotorSpeed(0, currentPulse);
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
-void PS2Controller::brake() {
-    currentDirection = Direction::LEFT;
-    Serial.println("Going straight.");
-    for (int i = 0; i < topSpeedCap / 2; i += accelIncrement) {
+// Runs in its own task to read controller input
+void PS2Controller::inputTask(void* pv) {
+    PS2Controller* controller = static_cast<PS2Controller*>(pv);
+    while (true) {
+        controller->ps2x.read_gamepad(false, false);
+        xSemaphoreTake(controller->directionMutex, portMAX_DELAY);
+
+        if (controller->ps2x.ButtonPressed(PSB_L1)) {
+            controller->braking = true;
+            controller->requestedDirection = Direction::NONE;  // cancel driving input immediately
+        } else if (controller->ps2x.Button(PSB_PAD_UP)) {
+            controller->requestedDirection = Direction::FORWARD;
+        } else if (controller->ps2x.Button(PSB_PAD_DOWN)) {
+            controller->requestedDirection = Direction::BACKWARD;
+        } else if (controller->ps2x.Button(PSB_PAD_LEFT)) {
+            controller->requestedDirection = Direction::LEFT;
+        } else if (controller->ps2x.Button(PSB_PAD_RIGHT)) {
+            controller->requestedDirection = Direction::RIGHT;
+        } else {
+            controller->requestedDirection = Direction::NONE;
+        }
+
+        xSemaphoreGive(controller->directionMutex);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+// Runs the main movement logic
+void PS2Controller::movementTask(void* pv) {
+    PS2Controller* controller = static_cast<PS2Controller*>(pv);
+    while (true) {
+        xSemaphoreTake(controller->directionMutex, portMAX_DELAY);
+        Direction dir = controller->requestedDirection;
+        bool localBraking = controller->braking;
+        xSemaphoreGive(controller->directionMutex);
+
+        if (!localBraking && dir != Direction::NONE) {
+            controller->moveStep(dir);
+        } else if (localBraking) {
+            controller->stopMotors(); // immediate halt before braking
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+// Runs in background and handles braking separately
+void PS2Controller::brakeTask(void* pv) {
+    PS2Controller* controller = static_cast<PS2Controller*>(pv);
+    while (true) {
+        bool localBraking = false;
+        Direction dir = Direction::NONE;
+        int pwm = 0;
+
+        // Copy and clear state under lock
+        xSemaphoreTake(controller->directionMutex, portMAX_DELAY);
+        localBraking = controller->braking;
+        if (localBraking) {
+            dir = controller->currentDirection;
+            pwm = controller->currentPWM;
+            controller->braking = false; // mark handled
+            controller->currentPWM = 0;
+            controller->currentDirection = Direction::NONE;
+        }
+        xSemaphoreGive(controller->directionMutex);
+
+        if (localBraking && dir != Direction::NONE) {
+            controller->brake(dir, pwm);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+// Handles smooth acceleration in a direction
+void PS2Controller::moveStep(Direction dir) {
+    if (dir == Direction::NONE) {
+        stopMotors();
+        xSemaphoreTake(directionMutex, portMAX_DELAY);
+        currentPWM = 0;
+        currentDirection = Direction::NONE;
+        xSemaphoreGive(directionMutex);
+        return;
+    }
+
+    // Update current direction
+    xSemaphoreTake(directionMutex, portMAX_DELAY);
+    currentDirection = dir;
+    xSemaphoreGive(directionMutex);
+
+    const static float curveFactor = 1.5;
+
+    while (true) {
+        // Check if the requested direction has changed
+        xSemaphoreTake(directionMutex, portMAX_DELAY);
+        Direction latestRequest = requestedDirection;
+        bool shouldExit = (latestRequest != currentDirection || braking);
+        xSemaphoreGive(directionMutex);
+        if (shouldExit) break;
+
+        // Increase PWM linearly, clamp to max
+        currentPWM = std::min(currentPWM + pwmIncrement, maxPWM);
+
+        // Apply quadratic curve
+        float scaled = pow(float(currentPWM) / float(maxPWM), curveFactor);
+        int adjustedPWM = int(scaled * scaled * maxPWM);
+
+        // Drive motors
         switch (currentDirection) {
             case Direction::FORWARD:
-                motorController->setAllMotorSpeeds(0, -i, -i, 0);
+                motorController->setMotorWheelSpeed(-adjustedPWM, -adjustedPWM);
                 break;
             case Direction::BACKWARD:
-                motorController->setAllMotorSpeeds(0, i, i, 0);
+                motorController->setMotorWheelSpeed(adjustedPWM, adjustedPWM);
                 break;
             case Direction::LEFT:
-                motorController->setAllMotorSpeeds(0, i, -i, 0);
+                motorController->setMotorWheelSpeed(-adjustedPWM, adjustedPWM);
                 break;
             case Direction::RIGHT:
-                motorController->setAllMotorSpeeds(0, -i, i, 0);
+                motorController->setMotorWheelSpeed(adjustedPWM, -adjustedPWM);
                 break;
-            default: break;
+            default:
+                break;
         }
-        delay(actionDelay);
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    // Reset motor state when done
+    stopMotors();
+    xSemaphoreTake(directionMutex, portMAX_DELAY);
+    currentPWM = 0;
+    currentDirection = Direction::NONE;
+    xSemaphoreGive(directionMutex);
+}
+
+void PS2Controller::stopMotors() {
+    motorController->setAllMotorSpeeds(0, 0, 0, 0);
+}
+
+void PS2Controller::brake(Direction dir, int initialPWM) {
+    Serial.println("Soft Braking");
+
+    const int steps = 8;
+    for (int i = steps; i >= 1; --i) {
+        int brakePWM = (initialPWM * i) / steps;
+
+        // Always preserve the original driving direction sign
+        switch (dir) {
+            case Direction::FORWARD:
+                motorController->setMotorWheelSpeed(-brakePWM, -brakePWM);  // Forward = negative
+                break;
+            case Direction::BACKWARD:
+                motorController->setMotorWheelSpeed(brakePWM, brakePWM);    // Backward = positive
+                break;
+            case Direction::LEFT:
+                motorController->setMotorWheelSpeed(-brakePWM, brakePWM);
+                break;
+            case Direction::RIGHT:
+                motorController->setMotorWheelSpeed(brakePWM, -brakePWM);
+                break;
+            default:
+                break;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(30));  // Longer delay = softer braking
+    }
+
+    // Stop completely after braking
+    stopMotors();
+}
+void PS2Controller::servoTask(void* pv) {
+    PS2Controller* controller = static_cast<PS2Controller*>(pv);
+
+    const int servoMin = 0;
+    const int servoMax = 4095;
+    const int center = 128;
+    const int deadzone = 10;
+    static int currentPulse = 0;
+
+    controller->servoController->setServoByPort(1, 0);
+
+    while (true) {
+        int ly = controller->ps2x.Analog(PSS_LY);
+
+        if (abs(ly - center) < deadzone) {
+            ly = center;
+        }
+
+        if (ly < center - deadzone * 3) {
+            currentPulse = max(currentPulse - controller->pwmIncrement, -servoMax);
+        } else if (ly > center + deadzone * 3) {
+            currentPulse = min(currentPulse + controller->pwmIncrement, servoMax);
+        }
+
+        controller->servoController->setServoByPort(1, currentPulse);
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
-void PS2Controller::controlServos() {
-    static int servoSpeed = 250; // Default servo speed
-    static int currentPulse[6] = {0}; // Track current pulse for each servo
-    static int selectedServo = 0; // 0-based index for servo port (0=port1, 5=port6)
-    int targetPulse = currentPulse[selectedServo], initialPulse = currentPulse[selectedServo];
-
-    // Cycle selected servo with SELECT button
-    if (ps2x.ButtonPressed(PSB_SELECT)) {
-        selectedServo = (selectedServo + 1) % 6;
-        Serial.print("Selected servo port: ");
-        Serial.println(selectedServo + 1);
-    }
-
-    if (ps2x.ButtonPressed(PSB_START)) {
-        servoController->setServoByPort(selectedServo + 1, 0);
-        currentPulse[selectedServo] = 0;
-    }
-
-    // L1 and R1 for selected servo rotation
-    if (ps2x.Button(PSB_L1)) {
-        currentPulse[selectedServo] = max(0, currentPulse[selectedServo] - 100);
-        targetPulse = currentPulse[selectedServo];
-        Serial.print("Servo "); Serial.print(selectedServo + 1); Serial.println(" rotating counter-clockwise.");
-    } else if (ps2x.Button(PSB_R1)) {
-        currentPulse[selectedServo] = min(4095, currentPulse[selectedServo] + 100);
-        targetPulse = currentPulse[selectedServo];
-        Serial.print("Servo "); Serial.print(selectedServo + 1); Serial.println(" rotating clockwise.");
-    } else {
-    }
-
-    // Square (Pink) to decrease servo speed
-    if (ps2x.Button(PSB_SQUARE)) {
-        servoSpeed = max(100, servoSpeed - 10);
-        Serial.print("Servo speed decreased to: ");
-        Serial.println(servoSpeed);
-    }
-
-    // Circle (Red) to increase servo speed
-    if (ps2x.Button(PSB_CIRCLE)) {
-        servoSpeed = min(2000, servoSpeed + 10);
-        Serial.print("Servo speed increased to: ");
-        Serial.println(servoSpeed);
-    }
-
-    // Smoothly move servo to targetPulse
-    if (initialPulse < targetPulse) {
-        for (int i = initialPulse; i < targetPulse; i += 10) {
-            servoController->setServoByPort(selectedServo + 1, i);
-            delay(20);
-        }
-    } else if (initialPulse > targetPulse) {
-        for (int i = initialPulse; i > targetPulse; i -= 10) {
-            servoController->setServoByPort(selectedServo + 1, i);
-            delay(20);
-        }
-    }
-    currentPulse[selectedServo] = targetPulse;
-}
-
-void PS2Controller::getJoystickValues(int& nJoyX, int& nJoyY) {
-    nJoyX = ps2x.Analog(PSS_LX) - X_JOY_CALIB;
-    nJoyY = ps2x.Analog(PSS_LY) - Y_JOY_CALIB;
+void PS2Controller::test() {
+    motorController->testMotorsSequentially(100, 50);
+    servoController->testServo(100, 50);
 }

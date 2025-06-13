@@ -7,6 +7,7 @@
 #include "Other.h"
 #include <math.h>
 
+
 #define X_JOY_CALIB 127
 #define Y_JOY_CALIB 128
 
@@ -28,40 +29,47 @@ enum class Direction {
 
 class PS2Controller {
 private:
-    bool drivingMode;
     MotorController* motorController;
     ServoController* servoController;
-
-    const int topSpeedCap = 4000;
-    const int accelIncrement = 75;
-    const int actionDelay = 20; // Delay for motor actions in milliseconds
-public:
-    Direction currentDirection = Direction::NONE;
     PS2X ps2x;
 
-    PS2Controller(MotorController* motorCtrl, ServoController* servoCtrl);
+    Direction currentDirection = Direction::NONE;
+    Direction requestedDirection = Direction::NONE;
 
-    void setup();
+    SemaphoreHandle_t directionMutex;
 
-    void toggleDrivingMode();
+    const int maxPWM = 4000;
+    const int pwmIncrement = 75;
+    int currentPWM = 0;
+    bool braking = false;
 
-    int getSpeed();
-
-    void getJoystickValues(int& nJoyX, int& nJoyY);
-
-    void calculateMotorMix(int nJoyX, int nJoyY, int& nMotMixL, int& nMotMixR);
-
-    void setMotorSpeeds(int nMotMixL, int nMotMixR, int speed);
-
+    void stopMotors();
+    void moveStep(Direction dir);
+    void brake(Direction dir, int startPWM);
     void goStraight();
     void goBackward();
     void goLeft();
     void goRight();
-    void brake();
 
     void controlServos();
 
+    static void inputTask(void* pv);
+    static void movementTask(void* pv);
+    static void brakeTask(void* pv);
+    static void servoTask(void* pv);
+    static void controlMotor1(void* pv);
+    
     void getJoystickValues(int& nJoyX, int& nJoyY);
+    void calculateMotorMix(int nJoyX, int nJoyY, int& nMotMixL, int& nMotMixR);
+    void setMotorSpeeds(int nMotMixL, int nMotMixR, int speed);
+
+public:
+
+    PS2Controller(MotorController* motorCtrl, ServoController* servoCtrl);
+
+    void test();
+    void setup();
+    void toggleDrivingMode();
 };
 
 #endif // PS2CONTROLLER_H
