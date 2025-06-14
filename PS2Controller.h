@@ -6,7 +6,10 @@
 #include "Servo.h"
 #include "Other.h"
 #include <math.h>
-
+#include <map>
+#include <cstdint>
+#include <string>
+#include <atomic>
 
 #define X_JOY_CALIB 127
 #define Y_JOY_CALIB 128
@@ -41,7 +44,8 @@ private:
     const int maxPWM = 4000;
     const int pwmIncrement = 75;
     int currentPWM = 0;
-    bool braking = false;
+    std::atomic<bool> braking = false;
+    std::atomic<bool> brakingRequested = false;
 
     void stopMotors();
     void moveStep(Direction dir);
@@ -50,8 +54,7 @@ private:
     void goBackward();
     void goLeft();
     void goRight();
-
-    void controlServos();
+    void toggleServoPulse();
 
     static void inputTask(void* pv);
     static void movementTask(void* pv);
@@ -62,8 +65,10 @@ private:
     void getJoystickValues(int& nJoyX, int& nJoyY);
     void calculateMotorMix(int nJoyX, int nJoyY, int& nMotMixL, int& nMotMixR);
     void setMotorSpeeds(int nMotMixL, int nMotMixR, int speed);
-
+    void applyHoldingBrake(Direction lastDir, int holdPWM = 30);
 public:
+
+    std::map<const char*, uint16_t> CONTROLS;
 
     PS2Controller(MotorController* motorCtrl, ServoController* servoCtrl);
 

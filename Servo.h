@@ -15,7 +15,7 @@ public:
 
     void init();
 
-    void setServoByPort(uint8_t port, uint16_t pulse);
+    void setServoByPort(uint8_t port, float angle);
 
     void testServo(uint16_t step, uint16_t delayMs);
 
