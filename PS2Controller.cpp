@@ -72,7 +72,7 @@ void PS2Controller::inputTask(void* pv) {
         xSemaphoreTake(controller->directionMutex, portMAX_DELAY);
         controller->braking = controller->ps2x.ButtonPressed(controller->CONTROLS.at("BRAKE"));
 
-        if (controller->ps2x.ButtonPressed(controller->CONTROLS.at("BRAKE"))) {
+        if (controller->ps2x.Button(controller->CONTROLS.at("BRAKE"))) {
             controller->brakingRequested = true;
             controller->requestedDirection = Direction::NONE;  // cancel driving input immediately
         } else if (controller->ps2x.Button(controller->CONTROLS.at("FORWARD"))) {
@@ -83,7 +83,7 @@ void PS2Controller::inputTask(void* pv) {
             controller->requestedDirection = Direction::LEFT;
         } else if (controller->ps2x.Button(controller->CONTROLS.at("RIGHT"))) {
             controller->requestedDirection = Direction::RIGHT;
-        } else if (controller->ps2x.Button(controller->CONTROLS.at("TOGGLE_GAPPLE"))) {
+        } else if (controller->ps2x.ButtonPressed(controller->CONTROLS.at("TOGGLE_GAPPLE"))) {
             controller->toggleServoPulse();
         } else {
             controller->requestedDirection = Direction::NONE;
@@ -127,11 +127,14 @@ void PS2Controller::brakeTask(void* pv) {
         if (softBrakeNow) {
             // Get and clear state under mutex
             xSemaphoreTake(controller->directionMutex, portMAX_DELAY);
+            
             dir = controller->currentDirection;
             pwm = controller->currentPWM;
+
             controller->brakingRequested = false;
             controller->currentDirection = Direction::NONE;
             controller->currentPWM = 0;
+
             xSemaphoreGive(controller->directionMutex);
 
             if (dir != Direction::NONE) {
@@ -206,14 +209,14 @@ void PS2Controller::moveStep(Direction dir) {
         // Check if the requested direction has changed
         xSemaphoreTake(directionMutex, portMAX_DELAY);
         Direction latestRequest = requestedDirection;
-        bool shouldExit = (latestRequest != currentDirection || braking);
+        bool shouldExit = (latestRequest != currentDirection || braking || brakingRequested);
         xSemaphoreGive(directionMutex);
         if (shouldExit) break;
 
         bool isTurning = currentDirection == Direction::LEFT || currentDirection == Direction::RIGHT;
 
         int maximumReachablePWM = isTurning ? maxPWM * 0.5 : maxPWM;
-        int pwmRamp = isTurning ? pwmIncrement * 1.5 : pwmIncrement * 1.3;
+        int pwmRamp = isTurning ? pwmIncrement * 1.75 : pwmIncrement * 1.25;
 
         // Increase PWM linearly, clamp to max
         currentPWM = std::min(currentPWM + pwmRamp, maximumReachablePWM);
@@ -384,21 +387,24 @@ void PS2Controller::toggleServoPulse() {
 
     static bool toggled = false;
 
-    if (!toggled) {
-        // rotate clockwise to maxAngle
-        for (float angle = centerAngle; angle <= maxAngle; angle += stepAngle) {
-            servoController->setServoByPort(port, angle);
-            vTaskDelay(pdMS_TO_TICKS(delayMs));
-        }
-        toggled = true;
-    } else {
-        // rotate counterclockwise back to center
-        for (float angle = maxAngle; angle >= centerAngle; angle -= stepAngle) {
-            servoController->setServoByPort(port, angle);
-            vTaskDelay(pdMS_TO_TICKS(delayMs));
-        }
-        toggled = false;
+    float offset = toggled ? -1.0f : 1.0f;
+
+    float target = std::clamp(centerAngle + offset * 90.0f, 0.0f, 180.0f);
+    float angle = centerAngle;
+    while (true) {
+        float delta = target - angle;
+        if (abs(delta) <= 0.1f) break;
+        Serial.println(abs(delta));
+        float step = std::clamp(delta, -stepAngle, stepAngle);
+        angle += step;
+
+        servoController->setServoByPort(port, angle);
+        vTaskDelay(pdMS_TO_TICKS(delayMs));
     }
+
+    servoController->setServoByPort(port, centerAngle);
+
+    toggled = !toggled;
 }
 
 void PS2Controller::test() {
